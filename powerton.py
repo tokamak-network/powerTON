@@ -61,9 +61,11 @@ class Operator(User):
             self.delegated += self.delegated_balances[name]
 
     def delegate(self, user, amount):
+        # User state update
         user.sub_balance(amount)
         user.delegated += amount
 
+        # Operator state update
         if user.name not in self.delegators:
             self.delegatees.append(user.name)
             self.delegated_balances[user.name] = 0
@@ -77,7 +79,9 @@ class Operator(User):
         if self.delegated_balances[user.name] < amount:
             raise Exception("There is not enough balance user has")
         else:
-            self.delegated_balances -= amount
+            self.delegated_balances[user.name] -= amount
+
+            # User state update
             user.add_balance(amount)
             user.delegated -= amount
 
@@ -182,9 +186,6 @@ class Powerton:
     DIST_PRIZE: tuple = field(default=(0.5, 0.2, 0.2, 0.1))
     DIST_AIRDROP: tuple = field(default=(0.8, 0.2, 0, 0))
 
-    # def __post_init__(self):
-    #     self.Staking_ratio = 0 if self.Total_TON_supply == 0 else self.Total_TON_staked / self.Total_TON_supply
-
     def _update_ton(self):
         # calc seigniorage
         # compound rate for seigniorage
@@ -196,8 +197,6 @@ class Powerton:
         for oper_name in [name for name in self.Operators.keys()]:
             for user_name in self.Operators[oper_name].delegatees:
                 # Add user seigniorage for staking
-                # user_seigniorage = (self.Operators[oper_name].delegated_balances[user_name] * _seigniorage_factor) \
-                #                    - self.Operators[oper_name].delegated_balances[user_name]
                 user_seigniorage = (self.Operators[oper_name].delegated_balances[user_name] / self.Total_TON_staked) \
                                     * _seigniorage
 
@@ -213,6 +212,7 @@ class Powerton:
                     self.Users[user_name].delegated += user_seigniorage
 
                 _seigniorage -= user_seigniorage  # total issued seigniorage
+                self.Total_TON_supply += user_seigniorage
 
         # Update pools
         _seigniorage = _seigniorage / 2
@@ -286,6 +286,8 @@ class Powerton:
         _user = self.Users[name]
         self.Operators[name] = Operator(_user)
         self.Users.pop(name)
+
+        self.Total_TON_staked += OMD
         return len(self.Operators)
 
     def add_player(self, name: str):
@@ -346,17 +348,17 @@ class Powerton:
 
     def update_phase(self) -> (int, int, int):
         last_phase = int(self.Current_power_phase)
-        _max_prize_pool, _min_prize_pool = self.calc_pool_in_phase()
+        _max_prize_pool, _min_prize_pool = self._calc_pool_in_phase()
 
         if self.Prize_pool > _max_prize_pool:
             while self.Prize_pool > _max_prize_pool:
                 self.Current_power_phase += 1
-                _max_prize_pool, _min_prize_pool = self.calc_pool_in_phase()
+                _max_prize_pool, _min_prize_pool = self._calc_pool_in_phase()
 
         if self.Prize_pool < _min_prize_pool:
             while self.Prize_pool < _min_prize_pool:
                 self.Current_power_phase -= 1
-                _max_prize_pool, _min_prize_pool = self.calc_pool_in_phase()
+                _max_prize_pool, _min_prize_pool = self._calc_pool_in_phase()
 
         # update power_sale
         new_phase = self.Current_power_phase
@@ -375,6 +377,11 @@ class Powerton:
 
         if last_phase < new_phase:
             # Prize Pool size up, Open New Power for sale
+            if last_phase == 0:
+                last_phase = 1
+                self.Power_sale[last_phase]["OPEN"] = True
+                self.Power_sale[last_phase]["AVAILABLE"] = self.POWER_PER_PHASE
+
             for phase in range(last_phase, new_phase):
                 self.Power_sale[phase]["OPEN"] = True
                 self.Power_sale[phase]["AVAILABLE"] = self.POWER_PER_PHASE
@@ -394,14 +401,22 @@ class Powerton:
 
     def check_stock_powers(self, amount):
         # stock power in current phase
-        stock_powers, last, new = self.update_phase()
+        _, _, _ = self.update_phase()
 
         _sale_powers = {}
 
         for phase in self.Power_sale.keys():
-            if self.Power_sale[phase]["AVAILABLE"] > amount:
+            if self.Power_sale[phase]["AVAILABLE"] >= amount:
                 _sale_powers.update({self.Power_sale[phase]["PRICE"]: self.Power_sale[phase]["AVAILABLE"]})
+                return _sale_powers
+            else:  # stock of power in phase less than amount
+                _sale_powers.update({self.Power_sale[phase]["PRICE"]: self.Power_sale[phase]["AVAILABLE"]})
+                amount -= self.Power_sale[phase]["AVAILABLE"]
 
+            if amount <= 0:
+                return _sale_powers
+
+        return _sale_powers
 
     def buy_power(self, name, amount):
         exist, [user, operator, player] = self.check_name(name)
@@ -416,7 +431,7 @@ class Powerton:
         if player:
             _target = self.Players[name]
         if operator:
-            raise Exception("Not allowed buy power by operator") # TODO: check details
+            raise Exception("Not allowed buy power by operator")  # TODO: check details
 
         # copy power_sale status then return if can
         self._update_ton()
@@ -427,11 +442,12 @@ class Powerton:
         power_sale = self.Power_sale.copy()
         avail_balance = float(_target.balance)
 
-        if stock_powers >= amount:
+        _amount = int(amount)
+        if stock_powers >= _amount:
             # enough to buy -> calc enough balance
             for phase in power_sale.keys():
                 # choose low volume one
-                _low = min(power_sale[phase]["AVAILABLE"], amount)
+                _low = min(power_sale[phase]["AVAILABLE"], _amount)
                 if _low == 0:
                     continue  # skip calc this phase
                 elif _low < 0:
@@ -444,7 +460,7 @@ class Powerton:
                 # Update balances
                 power_sale[phase]["AVAILABLE"] -= _low
                 power_sale[phase]["SOLD"] += _low
-                amount -= _low
+                _amount -= _low
 
                 if power_sale[phase]["AVAILABLE"] == 0:
                     power_sale[phase]["OPEN"] = False
@@ -473,7 +489,10 @@ class Powerton:
         for p in self.Players.keys():
             # dist by power
             _effective_powers = self.Players[p].power_bought - self.Players[p].power_played
-            _ratio_power_of_total = _effective_powers / self.Total_sold_powers
+            if self.Total_sold_powers == 0:
+                _ratio_power_of_total = 1
+            else:
+                _ratio_power_of_total = _effective_powers / self.Total_sold_powers
             self.Players[p].balance += _ratio_power_of_total * _paid_ton * self.DIST_BUY_POWER[1]
 
             # dist by Staked TON
@@ -484,7 +503,6 @@ class Powerton:
         for u in self.Users.keys():
             _ratio_staked = self.Users[u].delegated / self.Total_TON_staked
             self.Users[u].balance += _ratio_staked * _paid_ton * self.DIST_BUY_POWER[2]
-
 
     def _prize_dist(self, name):
         # call by `play_power` or `commit`
@@ -544,6 +562,7 @@ class Powerton:
 
         if random() < self.POWER_WIN_CHANCE * amount:
             self._prize_dist(name)
+            print("Won! {} prize".format(name))
 
     def commit(self, name):
         # prize chance
@@ -559,7 +578,7 @@ class Powerton:
         _result = [False, False]
 
         #  print("modified winning chance : ", self.POWER_WIN_CHANCE * _power_factor)
-        if random() < self.POWER_WIN_CHANCE * _power_factor:
+        if random() < self.WINNING_CHANCE * _power_factor:
             self._prize_dist(name)
             print("Won! {} prize!".format(name))
             _result[0] = True
