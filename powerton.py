@@ -137,7 +137,7 @@ class Powerton:
     BLOCK_TIME: int = 13  # ethereum avg block time
     BLOCKS_YEAR: int = 2425846  # int((365 * 24 * 60 * 60) / 13)
     INITIAL_SUPPLY: int = 1_000_000_000  # will going to supply after ICO
-    SEIG_PER_BLOCK: float = 0.0000000717083085133
+    SEIG_PER_BLOCK: float = 1.0000000717083085133
     AIRDROP_RATIO: float = 0.1  # prize to airdrop pool ratio
     AIRDROP_CHANCE: float = 0.000_1
     WINNING_CHANCE: float = 0.000_000_0001
@@ -187,14 +187,19 @@ class Powerton:
 
     def _update_ton(self):
         # calc seigniorage
-        _seigniorage_factor = self.SEIG_PER_BLOCK * (self.Current_block - self.Last_committed)
-        _seigniorage = self.Total_TON_supply * _seigniorage_factor
+        # compound rate for seigniorage
+        # Total
+        _seigniorage_factor = self.SEIG_PER_BLOCK ** (self.Current_block - self.Last_committed)
+        _seigniorage = (self.Total_TON_supply * _seigniorage_factor) - self.Total_TON_supply
 
         # Warn : This is not accurate digit precision
         for oper_name in [name for name in self.Operators.keys()]:
             for user_name in self.Operators[oper_name].delegatees:
                 # Add user seigniorage for staking
-                user_seigniorage = self.Operators[oper_name].delegated_balances[user_name] * _seigniorage_factor
+                # user_seigniorage = (self.Operators[oper_name].delegated_balances[user_name] * _seigniorage_factor) \
+                #                    - self.Operators[oper_name].delegated_balances[user_name]
+                user_seigniorage = (self.Operators[oper_name].delegated_balances[user_name] / self.Total_TON_staked) \
+                                    * _seigniorage
 
                 self.Total_TON_staked += user_seigniorage  # global
                 self.Operators[oper_name].delegated_balances[user_name] += user_seigniorage  # operator
@@ -209,16 +214,17 @@ class Powerton:
 
                 _seigniorage -= user_seigniorage  # total issued seigniorage
 
-        # update prize
+        # Update pools
         _seigniorage = _seigniorage / 2
 
         self.Prize_pool += _seigniorage * (1 - self.AIRDROP_RATIO)
         self.Airdrop_pool += _seigniorage * self.AIRDROP_RATIO
+        self.Total_TON_supply += _seigniorage
 
         # check power prize phase
         # self._update_phase()
 
-        self.Total_TON_supply += self.Total_TON_supply * _seigniorage_factor
+        self.Staking_ratio = 0 if self.Total_TON_supply == 0 else self.Total_TON_staked / self.Total_TON_supply
 
     def wrap(self, block=1):
         # TODO update & move current_block
