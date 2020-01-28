@@ -347,6 +347,10 @@ class Powerton:
         return _max, _min
 
     def update_phase(self) -> (int, int, int):
+        # check prize pool if has nothing then
+        if self.Prize_pool == 0:
+            return (0, 0, 0)
+
         last_phase = int(self.Current_power_phase)
         _max_prize_pool, _min_prize_pool = self._calc_pool_in_phase()
 
@@ -400,6 +404,9 @@ class Powerton:
                last_phase, new_phase
 
     def check_stock_powers(self, amount):
+        if self.Prize_pool == 0:
+            return {0: 0}
+
         # stock power in current phase
         _, _, _ = self.update_phase()
 
