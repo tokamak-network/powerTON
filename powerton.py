@@ -27,7 +27,7 @@ class User:
 @dataclass
 class Operator(User):
     # POWERs
-    total_supported_power: int = 0
+    supported_power: int = 0
     power_supporters: dict = field(default_factory=dict,
                                    metadata={"description":
                                                 {"user_name": "supports power amount"}})
@@ -121,7 +121,7 @@ class Player(User):
                 operator.power_supporters[self.name] = 0
 
             operator.power_supporters[self.name] += amount
-            operator.total_supported_power += amount
+            operator.supported_power += amount
 
     def power_down(self, operator: Operator, amount):
         if self.name not in operator.power_supporters.keys():
@@ -131,7 +131,7 @@ class Player(User):
                 raise Exception("Power : Not enough power to down")
             else:
                 operator.power_supporters[self.name] -= amount
-                operator.total_supported_power -= amount
+                operator.supported_power -= amount
                 self.power_available += amount
 
 @dataclass
@@ -175,6 +175,7 @@ class Powerton:
 
     Current_power_phase: int = 0
     Total_sold_powers: int = 0
+    Total_supported_powers: int = 0
     Power_sale: dict = field(default_factory=\
                              lambda: {i+1: {"OPEN": False, "AVAILABLE": 0, "SOLD": 0, "PRICE": 0.0125 * (2 ** i)} for i in range(11)})
 
@@ -510,6 +511,36 @@ class Powerton:
         for u in self.Users.keys():
             _ratio_staked = self.Users[u].delegated / self.Total_TON_staked
             self.Users[u].balance += _ratio_staked * _paid_ton * self.DIST_BUY_POWER[2]
+
+    def power_up(self, player_name: str, operator_name: str, amount):
+        _, [_, _, player] = self.check_name(player_name)
+        _, [_, operator, _] = self.check_name(operator_name)
+
+        if not player:
+            raise Exception("No Player exist")
+        if not operator:
+            raise Exception("No Operator exist")
+
+        _Player = self.Players[player_name]
+        _Operator = self.Operators[operator_name]
+
+        _Player.power_up(_Operator, amount)
+        self.Total_supported_powers += amount
+
+    def power_down(self, player_name: str, operator_name: str, amount):
+        _, [_, _, player] = self.check_name(player_name)
+        _, [_, operator, _] = self.check_name(operator_name)
+
+        if not player:
+            raise Exception("No Player exist")
+        if not operator:
+            raise Exception("No Operator exist")
+
+        _Player = self.Players[player_name]
+        _Operator = self.Operators[operator_name]
+
+        _Player.power_down(_Operator, amount)
+        self.Total_supported_powers -= amount
 
     def _prize_dist(self, name):
         # call by `play_power` or `commit`
