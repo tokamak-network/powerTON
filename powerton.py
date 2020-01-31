@@ -141,7 +141,7 @@ class Powerton:
     BLOCK_TIME: int = 13  # ethereum avg block time
     BLOCKS_YEAR: int = 2425846  # int((365 * 24 * 60 * 60) / 13)
     INITIAL_SUPPLY: int = 1_000_000_000  # will going to supply after ICO
-    SEIG_PER_BLOCK: float = 1.0000000717083085133
+    SEIG_PER_BLOCK: float = 0 # (INITIAL_SUPPLY * SEIGNIORAGE) / BLOCKS_YEAR
     AIRDROP_RATIO: float = 0.1  # prize to airdrop pool ratio
     AIRDROP_CHANCE: float = 0.000_1
     WINNING_CHANCE: float = 0.000_000_0001
@@ -176,8 +176,10 @@ class Powerton:
     Current_power_phase: int = 0
     Total_sold_powers: int = 0
     Total_supported_powers: int = 0
-    Power_sale: dict = field(default_factory=\
-                             lambda: {i+1: {"OPEN": False, "AVAILABLE": 0, "SOLD": 0, "PRICE": 0.0125 * (2 ** i)} for i in range(11)})
+    Power_sale: dict = field(default_factory=lambda: {i+1: {"OPEN": False,
+                                                            "AVAILABLE": 0,
+                                                            "SOLD": 0,
+                                                            "PRICE": 0.0125 * (2 ** i)} for i in range(11)})
 
     Prize_pool: int = 0
     Airdrop_pool: int = 0
@@ -187,19 +189,19 @@ class Powerton:
     DIST_PRIZE: tuple = field(default=(0.5, 0.2, 0.2, 0.1))
     DIST_AIRDROP: tuple = field(default=(0.8, 0.2, 0, 0))
 
+    def __post_init__(self):
+        self.SEIG_PER_BLOCK = (self.INITIAL_SUPPLY * self.SEIGNIORAGE) / self.BLOCKS_YEAR
+
     def _update_ton(self):
-        # calc seigniorage
-        # compound rate for seigniorage
-        # Total
-        _seigniorage_factor = self.SEIG_PER_BLOCK ** (self.Current_block - self.Last_committed)
-        _seigniorage = (self.Total_TON_supply * _seigniorage_factor) - self.Total_TON_supply
+        _seigniorage = self.SEIG_PER_BLOCK * (self.Current_block - self.Last_committed)
+        _current_staked = float(self.Total_TON_staked)
 
         # Warn : This is not accurate digit precision
         for oper_name in [name for name in self.Operators.keys()]:
             for user_name in self.Operators[oper_name].delegatees:
                 # Add user seigniorage for staking
-                user_seigniorage = (self.Operators[oper_name].delegated_balances[user_name] / self.Total_TON_staked) \
-                                    * _seigniorage
+                user_seigniorage = (self.Operators[oper_name].delegated_balances[user_name] / _current_staked) \
+                                    * self.SEIG_PER_BLOCK * (self.Current_block - self.Last_committed)
 
                 self.Total_TON_staked += user_seigniorage  # global
                 self.Operators[oper_name].delegated_balances[user_name] += user_seigniorage  # operator
@@ -216,14 +218,15 @@ class Powerton:
                 self.Total_TON_supply += user_seigniorage
 
         # Update pools
+        self.Total_TON_supply += _seigniorage
+
         _seigniorage = _seigniorage / 2
 
         self.Prize_pool += _seigniorage * (1 - self.AIRDROP_RATIO)
         self.Airdrop_pool += _seigniorage * self.AIRDROP_RATIO
-        self.Total_TON_supply += _seigniorage
 
         # check power prize phase
-        # self._update_phase()
+        self.update_phase()
 
         self.Staking_ratio = 0 if self.Total_TON_supply == 0 else self.Total_TON_staked / self.Total_TON_supply
 
@@ -350,18 +353,29 @@ class Powerton:
     def update_phase(self) -> (int, int, int):
         # check prize pool if has nothing then
         if self.Prize_pool == 0:
+            self.Current_power_phase = 1
             return (0, 0, 0)
 
+
         last_phase = int(self.Current_power_phase)
+        _phases = list(self.Power_sale.keys())
         _max_prize_pool, _min_prize_pool = self._calc_pool_in_phase()
 
         if self.Prize_pool > _max_prize_pool:
             while self.Prize_pool > _max_prize_pool:
+                # Maximum phase is 10
+                if self.Current_power_phase >= _phases[-1]:
+                    break
+
                 self.Current_power_phase += 1
                 _max_prize_pool, _min_prize_pool = self._calc_pool_in_phase()
 
         if self.Prize_pool < _min_prize_pool:
             while self.Prize_pool < _min_prize_pool:
+                # Minimum phase is 1
+                if self.Current_power_phase <= _phases[0]:
+                    break
+
                 self.Current_power_phase -= 1
                 _max_prize_pool, _min_prize_pool = self._calc_pool_in_phase()
 
@@ -611,7 +625,7 @@ class Powerton:
         self.Last_committed = self.Current_block
 
         # TODO : check power supported winning chance
-        _power_factor = 1 + self.Operators[name].total_supported_power
+        _power_factor = 1 + self.Operators[name].supported_power
 
         _result = [False, False]
 
